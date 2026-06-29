@@ -1,10 +1,12 @@
 # Atomic Heart (VK Play / GameCenter) on Linux — Lutris + UMU + Proton
 
+**English** | [Русский](README.ru.md)
+
 How to get the **VK Play (VKGC / GameCenter)** edition of **Atomic Heart** running on Linux through
 **Lutris + umu-run + Proton**, fixing the instant startup crash, the broken video, and a
 720p/blurry render, and getting native 4K.
 
-> **TL;DR (EN):** The game crashes at launch because Proton's Media Foundation backend
+> **TL;DR:** The game crashes at launch because Proton's Media Foundation backend
 > (**winedmo**, and also **winegstreamer**) cannot play the intro movie
 > `Launch_FHD_60FPS_PC_Steam.mp4`. **Rename/remove the `Launch_*.mp4` files** and force the
 > GStreamer media backend with `PROTON_MEDIA_USE_GST=1`. Then fix the resolution in
@@ -12,32 +14,32 @@ How to get the **VK Play (VKGC / GameCenter)** edition of **Atomic Heart** runni
 
 ---
 
-## Окружение, на котором проверено
+## Tested environment
 
 | | |
 |---|---|
-| ОС | Bazzite (Fedora atomic), ядро 7.0.x |
-| DE / сессия | KDE Plasma 6.6.5, kwin 6.6.5, **Wayland** |
-| GPU / драйвер | NVIDIA RTX 4090, проприетарный драйвер 610.43.02 |
+| OS | Bazzite (Fedora atomic), kernel 7.0.x |
+| DE / session | KDE Plasma 6.6.5, kwin 6.6.5, **Wayland** |
+| GPU / driver | NVIDIA RTX 4090, proprietary driver 610.43.02 |
 | CPU | Ryzen 7 7800X3D |
-| Лаунчер | Lutris 0.5.22, runner `umu-run` (umu-launcher 1.4.0) |
+| Launcher | Lutris 0.5.22, runner `umu-run` (umu-launcher 1.4.0) |
 | Proton | GE-Proton10-34 |
-| Игра | Atomic Heart, **версия VK Play** (через GameCenter.exe), UE4 4.27.2 |
+| Game | Atomic Heart, **VK Play edition** (via GameCenter.exe), UE4 4.27.2 |
 
-Запуск идёт по цепочке: **Lutris → umu-run → GameCenter.exe (VKGC) → AtomicHeart-Win64-Shipping.exe**.
+Launch chain: **Lutris → umu-run → GameCenter.exe (VKGC) → AtomicHeart-Win64-Shipping.exe**.
 
 ---
 
-## Симптом 1 — мгновенный краш на старте
+## Symptom 1 — instant crash on startup
 
-Игра падает сразу при запуске (`SecondsSinceStart=0`), крэш-дамп вида:
+The game crashes immediately at launch (`SecondsSinceStart=0`), crash dump like:
 
 ```
 C:\users\steamuser\AppData\Local\AtomicHeart\Saved\Crashes\UE4CC-Windows-XXXX_0000
 Unhandled Exception: EXCEPTION_ACCESS_VIOLATION reading address 0x0000000000000000
 ```
 
-В логе Proton (`PROTON_LOG`) видно:
+In the Proton log (`PROTON_LOG`):
 
 ```
 winedmo_demuxer_create url L"../../../AtomicHeart/Content/Movies/Launch_FHD_60FPS_PC_Steam.mp4"
@@ -46,76 +48,76 @@ demuxer_create Failed to open input, error 1 (Error number 1 occurred).
 winedmo_demuxer_create demuxer_create failed, status 0xc0000001
 ```
 
-### Причина
+### Root cause
 
-Стартовый ролик `Launch_FHD_60FPS_PC_Steam.mp4` (H264 + AAC) проигрывается через **Media Foundation**,
-которую в Proton реализует **winedmo** (FFmpeg-бэкенд). У winedmo дефектная реализация чтения/`Seek()`
-байт-стрима — он не может прочитать поток (известный баг, ломает старт-видео и в других играх; на
-Steam-версии Atomic Heart видео тоже сломаны). MF не получает media source → `CreatePresentationDescriptor`
-возвращает NULL → разыменование NULL → краш.
+The startup movie `Launch_FHD_60FPS_PC_Steam.mp4` (H264 + AAC) is played through **Media Foundation**,
+which Proton implements with **winedmo** (an FFmpeg backend). winedmo has a flawed byte-stream
+read/`Seek()` implementation and cannot read the stream (a known bug that breaks startup videos in
+other games too; videos are also broken on the Steam edition of Atomic Heart). Media Foundation
+never gets a media source → `CreatePresentationDescriptor` returns NULL → NULL dereference → crash.
 
-Переключение на второй бэкенд (`winegstreamer`) убирает краш winedmo, **но крашится сам winegstreamer**
-в glue-слое `IMFByteStream → wg_parser`. Сам файл при этом **исправен** (декодируется хостовым
-gstreamer без ошибок). То есть оба MF-бэкенда Proton не тянут этот ролик.
+Switching to the other backend (`winegstreamer`) removes the winedmo crash, **but winegstreamer itself
+crashes** in the `IMFByteStream → wg_parser` glue layer. The file itself is **fine** (it decodes with
+host gstreamer without errors). In other words, both of Proton's MF backends fail on this movie.
 
-### Фикс — пропустить стартовый ролик
+### Fix — skip the startup movie
 
-Проверенный обходной путь (как и на Steam-версии): убрать стартовые ролики, игра грузится сразу в меню.
+The proven workaround (same as on the Steam edition): remove the startup movies, the game boots
+straight to the menu.
 
 ```bash
-# путь к Movies внутри префикса VK Play (поправьте под свой)
+# path to Movies inside the VK Play prefix (adjust to yours)
 MOV="$HOME/Games/atomic-heart-vk/pfx/drive_c/VK Play/Atomic Heart/AtomicHeart/Content/Movies"
 
-# переименовываем ВСЕ Launch_* (PC_Steam + PS4/PS5/Xbox — чтобы игра не подхватила другой вариант)
+# rename ALL Launch_* (PC_Steam + PS4/PS5/Xbox — so the game won't pick another variant)
 for f in "$MOV"/Launch_*.mp4; do mv -v "$f" "$f.bak"; done
 ```
 
-Откат (вернуть ролики):
+Revert (restore the movies):
 
 ```bash
 for f in "$MOV"/Launch_*.bak; do mv "$f" "${f%.bak}"; done
 ```
 
-> ⚠️ **VK Play GameCenter** при проверке/обновлении сверяет GUP-манифест (size + MD5) и пометит
-> переименованные файлы как «отсутствующие» → докачает. На обычном запуске обычно не трогает.
-> Если докачивает на каждом старте — обходить проверку GameCenter / запускать
-> `AtomicHeart-Win64-Shipping.exe` напрямую.
+> ⚠️ **VK Play GameCenter** verifies the GUP manifest (size + MD5) on check/update and will mark the
+> renamed files as "missing" → re-download them. A normal launch usually leaves them alone.
+> If it re-downloads on every start, bypass GameCenter's verification / launch
+> `AtomicHeart-Win64-Shipping.exe` directly.
 
-Внутриигровые ролики (мультики на выборе сложности и т.п.) на Proton будут просто **чёрными**,
-но **не крашат** игру.
+In-game videos (difficulty-selection cartoons, etc.) will just be **black** on Proton, but they do
+**not** crash the game.
 
-### Дополнительно — форс GStreamer-бэкенда
+### Also — force the GStreamer backend
 
-В переменные окружения добавляем:
+Add to the environment:
 
 ```
 PROTON_MEDIA_USE_GST=1
 ```
 
-Отключает winedmo и переводит видео на winegstreamer. Полезно для внутриигровых видео и в целом
-безопаснее на этой связке. (Это та же переменная, которую GE-Proton проставляет в protonfixes
-для игр с битым видео.)
+Disables winedmo and routes video through winegstreamer. Useful for in-game videos and generally safer
+on this stack. (This is the same variable GE-Proton sets in protonfixes for games with broken video.)
 
 ---
 
-## Симптом 2 — мыло / рендер в 720p, курсор зажат в углу
+## Symptom 2 — blurry / 720p render, cursor clipped to the corner
 
-После лого появляется чёрное окно в **1280×720**, картинка мыльная, а курсор в меню двигается
-только в пределах верхнего-левого угла (зоны 720p поверх 4K-экрана).
+After the logo, a black **1280×720** window appears, the picture is blurry, and in the menu the cursor
+only moves within the top-left corner (the 720p zone over a 4K screen).
 
-### Причина
+### Root cause
 
-В `GameUserSettings.ini` рассинхрон: `ResolutionSizeX/Y` стоит 4K, но фактический размер окна
-берётся из `DesiredScreenWidth/Height=1280×720`.
+A mismatch in `GameUserSettings.ini`: `ResolutionSizeX/Y` is 4K, but the actual window size is taken
+from `DesiredScreenWidth/Height=1280×720`.
 
-### Фикс
+### Fix
 
-Файл:
+File:
 ```
 <prefix>/drive_c/users/steamuser/AppData/Local/AtomicHeart/Saved/Config/WindowsNoEditor/GameUserSettings.ini
 ```
 
-Привести все поля разрешения к нативному (пример для 4K):
+Set all resolution fields to native (example for 4K):
 
 ```ini
 ResolutionSizeX=3840
@@ -129,32 +131,32 @@ LastUserConfirmedDesiredScreenWidth=3840
 LastUserConfirmedDesiredScreenHeight=2160
 ```
 
-Ключевым было именно `DesiredScreenWidth/Height`. После этого — нативное 4K, курсор по всему экрану.
+The key fields were `DesiredScreenWidth/Height`. After this: native 4K, cursor across the whole screen.
 
 ---
 
 ## HDR
 
-В **этой сборке игры нет настройки HDR**, поэтому UE4 не активирует HDR-свопчейн и HDR на выходе
-не появляется, какие бы переменные ни ставить.
+**This build of the game has no HDR setting**, so UE4 never activates an HDR swapchain and no HDR is
+emitted, regardless of which variables you set.
 
-Если игра HDR поддерживает, то на KDE Plasma 6.6 + Wayland + NVIDIA (драйвер новее 595.58.03)
-HDR без gamescope включается так (для GE-Proton):
+If a game *does* support HDR, then on KDE Plasma 6.6 + Wayland + NVIDIA (driver newer than 595.58.03)
+HDR without gamescope is enabled like this (for GE-Proton):
 
 ```
-PROTON_ENABLE_WAYLAND=1   # Wine Wayland-драйвер
-PROTON_ENABLE_HDR=1       # = DXVK_HDR=1 в GE-Proton
+PROTON_ENABLE_WAYLAND=1   # Wine Wayland driver
+PROTON_ENABLE_HDR=1       # = DXVK_HDR=1 in GE-Proton
 DXVK_HDR=1
 ```
-+ включить HDR в самой игре (`bUseHDRDisplayOutput=True`). На драйверах старше 595.58.03
-дополнительно нужен `vk-hdr-layer` + `ENABLE_HDR_WSI=1`.
+plus enabling HDR in the game itself (`bUseHDRDisplayOutput=True`). On drivers older than 595.58.03 you
+also need `vk-hdr-layer` + `ENABLE_HDR_WSI=1`.
 
-> **gamescope** как путь к HDR здесь не годится: он крашит сам GameCenter (VKGC), и к тому же
-> gamescope-HDR на NVIDIA после Plasma 6.5 сам по себе сломан.
+> **gamescope** is not a viable HDR route here: it crashes GameCenter (VKGC) itself, and gamescope-HDR
+> on NVIDIA has been broken since Plasma 6.5.
 
 ---
 
-## Итоговая конфигурация Lutris (env-секция)
+## Final Lutris configuration (env section)
 
 ```yaml
 system:
@@ -163,8 +165,8 @@ system:
     GAMEID: '0'
     LC_ALL: ''
     PROTONPATH: /home/<user>/.local/share/Steam/compatibilitytools.d/GE-Proton10-34
-    PROTON_MEDIA_USE_GST: '1'        # винегстример вместо битого winedmo
-    DXVK_HDR: '1'                    # HDR-готовность (в игре эффекта нет — нет настройки)
+    PROTON_MEDIA_USE_GST: '1'        # winegstreamer instead of broken winedmo
+    DXVK_HDR: '1'                    # HDR-ready (no effect in-game — no setting)
     PROTON_ENABLE_HDR: '1'
     PROTON_ENABLE_WAYLAND: '1'
     WINEDLLOVERRIDES: sl.interposer=
@@ -175,7 +177,7 @@ wine:
   runner_executable: /usr/bin/umu-run
 ```
 
-Для отладки видео/MF можно временно добавить:
+For debugging video/MF you can temporarily add:
 ```
 PROTON_LOG: -all,+loaddll,+module,+warn,+err,+mfplat,+quartz,+dmo
 PROTON_LOG_DIR: /home/<user>
@@ -184,26 +186,26 @@ GST_DEBUG: '2'
 
 ---
 
-## Чек-лист «с нуля»
+## From-scratch checklist
 
-1. Установить игру VK Play через GameCenter (в Lutris через umu-run / GE-Proton).
-2. `PROTON_MEDIA_USE_GST=1` в окружение.
-3. Переименовать `Content/Movies/Launch_*.mp4` → `.bak`.
-4. Запустить → дойти до меню → выставить разрешение; при мыле/720p поправить
-   `GameUserSettings.ini` (`DesiredScreenWidth/Height`).
-5. Играть.
-
----
-
-## Источники / благодарности
-
-- ProtonDB — Atomic Heart (app 668580), отчёты про сломанные видео и пропуск стартовых роликов.
-- CachyOS proton-cachyos CHANGELOG — описание бага winedmo `Seek()`.
-- GE-Proton (GloriousEggroll) — переменная `PROTON_MEDIA_USE_GST` / protonfixes.
-- ValveSoftware/Proton issue #6554 (Atomic Heart, видео не рендерятся).
-
-Диагностика проведена реверс-инжинирингом winedmo.so и разбором Proton-логов.
+1. Install the VK Play game via GameCenter (in Lutris through umu-run / GE-Proton).
+2. Add `PROTON_MEDIA_USE_GST=1` to the environment.
+3. Rename `Content/Movies/Launch_*.mp4` → `.bak`.
+4. Launch → reach the menu → set resolution; if blurry/720p, fix `GameUserSettings.ini`
+   (`DesiredScreenWidth/Height`).
+5. Play.
 
 ---
 
-*Если помогло — звезда приветствуется. PR с подтверждениями на другом железе/драйверах welcome.*
+## Sources / credits
+
+- ProtonDB — Atomic Heart (app 668580): reports about broken videos and skipping startup movies.
+- CachyOS proton-cachyos CHANGELOG — description of the winedmo `Seek()` bug.
+- GE-Proton (GloriousEggroll) — the `PROTON_MEDIA_USE_GST` variable / protonfixes.
+- ValveSoftware/Proton issue #6554 (Atomic Heart, videos don't render).
+
+Diagnosis done by reverse-engineering `winedmo.so` and parsing Proton logs.
+
+---
+
+*If this helped, a star is appreciated. PRs confirming other hardware/drivers are welcome.*
